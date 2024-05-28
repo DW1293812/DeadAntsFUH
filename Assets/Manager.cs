@@ -4,6 +4,8 @@ using UnityEngine;
 using TMPro;
 using UnityEngine.UI;
 using System.Linq;
+using static UnityEngine.GraphicsBuffer;
+
 
 public class Manager : MonoBehaviour
 {
@@ -36,6 +38,9 @@ public class Manager : MonoBehaviour
     public Ant selectedAnt = null;
     public LayerMask mask;
     public LineRenderer pathShower;
+    int cycles = 0;
+    public TMP_Text cyleText;
+
     // Start is called before the first frame update
     void Start()
     {
@@ -47,7 +52,10 @@ public class Manager : MonoBehaviour
 
     private void ResetMe()
     {
+        finised = false;
+        cycles = 0;
         buttonText.text = "START";
+        cyleText.text = "Cycles: " + cycles.ToString();
         simulate = true;
         gridSizeX = 20;
         gridSizeY = 20;
@@ -89,6 +97,8 @@ public class Manager : MonoBehaviour
 
     public IEnumerator StartSimulation()
     {
+        cycles = 0;
+        cyleText.text = "Cycles: " + cycles.ToString();
         buttonText.text = "STOP";
         for (int i = 0; i < uIElements.Length; i++)
         { if (i != 4) uIElements[i].main.SetActive(false); }
@@ -291,10 +301,23 @@ public class Manager : MonoBehaviour
             DecisionMaker(currentAnt, grid[currentAnt.myGridPosition.x, currentAnt.myGridPosition.y]);
         }
 
+        for (int i = 0; i < gridSizeX; i++)
+        {
+            for (int i2 = 0;i2 < gridSizeY; i2++)
+            {
+                grid[i, i2].phearomon *= 0.95f;
+                grid[i, i2].emission.rateOverTime = Mathf.Clamp(grid[i, i2].phearomon * 10f, 0, 1000);
+            }
+        }
+
+
 
 
         isSimulating = false;
         simulationSpeed = uIElements[4].myValue * 5f + 1f;
+        if (!finised)
+        cycles++;
+        cyleText.text = "Cycles: " + cycles.ToString();
     }
 
 
@@ -336,41 +359,41 @@ public class Manager : MonoBehaviour
         }
 
 
+        if (target.deadAnts.Count > 0)
+        target.phearomon+= 1f * target.deadAnts.Count;
 
-        target.phearomon = target.deadAnts.Count;
+        //Debug.LogError(GetProbability(target, target.myX, target.myZ, 4, alpha));
+
         if (ant.path.Count == 0)
         {
-            float prop = 1f;
-            prop = ((1f / deadAnts.Count) * target.deadAnts.Count) + alpha;
+            
+            float prop = ((1f / deadAnts.Count) * target.deadAnts.Count) + alpha;
             //  prop = Mathf.Max(0.0f, Mathf.Min(1.0f, prop));
 
 
             if (ant.deadAnt == -1)
             {
-                if (target.deadAnts.Count > 0)
+                if (target.deadAnts.Count > 0 && Random.Range(0.0000f, 1.0000f) < 1f - prop)
                 {
 
-
-                    if (Random.Range(0.0000f, 1.0000f) < 1f - prop)
-                    {
                         Ant currentDeadAnt = target.deadAnts[0];
                         ant.deadAnt = currentDeadAnt.index;
                         currentDeadAnt.myPrefab.transform.SetParent(ant.myPrefab.transform);
                         target.deadAnts.RemoveAt(0);
                         ant.myLastPile = new Vector2Int(target.myX, target.myZ);
-                        ant.path = FindPath(new Vector2Int(target.myX, target.myZ), checkForPheromon(target, 2));
-                        target.phearomon = target.deadAnts.Count;
-                    }
+                        ant.path = FindPath(new Vector2Int(target.myX, target.myZ), checkForPheromon(target, 1));
+
 
                 }
                 else
                 {
-                    var newList = checkForDeadAnts(target, 2, true);
+                    ant.searchForNewDead = true;
+                    var newList = checkForDeadAnts(target, 1, true, ant);
                     if (newList.Contains(ant.myLastPile))
                         newList.Remove(ant.myLastPile);
                     if (newList.Count > 0)
                     {
-                        ant.path = FindPath(new Vector2Int(target.myX, target.myZ), newList[Random.Range(0, newList.Count)]);
+                        ant.path = FindPath(new Vector2Int(target.myX, target.myZ), newList[0]);
 
                     }
                 }
@@ -388,14 +411,12 @@ public class Manager : MonoBehaviour
                     ant.deadAnt = -1;
                     currentDeadAnt.myPrefab.transform.SetParent(null);
                     target.deadAnts.Add(currentDeadAnt);
-                    target.phearomon = target.deadAnts.Count;
                     ant.myLastPile = new Vector2Int(target.myX, target.myZ);
-
 
                     if (target.deadAnts.Count == deadAnts.Count)
                         finised = true;
 
-                    var newList = checkForDeadAnts(target, 2, false);
+                    var newList = checkForDeadAnts(target, 1, false, ant);
                     if (newList.Contains(ant.myLastPile))
                         newList.Remove(ant.myLastPile);
                     if (newList.Count > 0)
@@ -408,12 +429,9 @@ public class Manager : MonoBehaviour
                 }
                 else
                 {
-                    var phCheckd = checkForPheromon(target, 2);
+                    ant.path = FindPath(new Vector2Int(target.myX, target.myZ), checkForPheromon(target, 1));
 
-                   if (!phCheckd.Equals(ant.myLastPile))
-                    {
-                        ant.path = FindPath(new Vector2Int(target.myX, target.myZ), phCheckd);
-                    }
+
                        
 
 
@@ -424,15 +442,50 @@ public class Manager : MonoBehaviour
             }
         }
 
-        target.emission.rateOverTime = Mathf.Clamp(target.phearomon * 10f, 0, 1000);
+        
     }
 
-    public bool Drop()
+    public float GetProbability(Knoten k, int y, int x, int n, float c)
     {
-        return true;
+        int yStart = y - n;
+        int xStart = x - n;
+        float total = 0.0f;
+        
+        for (int i = 0; i < (n * 2) + 1; i++)
+        {
+            int xi = (xStart + i + gridSizeX) % gridSizeX;
+            for (int j = 0; j < (n * 2) + 1; j++)
+            {
+                if (j != x && i != y)
+                {
+                    int yj = (yStart + j + gridSizeY) % gridSizeY;
+                    Knoten o = grid[xi, yj];
+                    if (o != null)
+                    {
+                        float s = k.Similarity(o);
+                        total += s;
+                    }
+                }
+            }
+        }
+
+        float maxPoints = Mathf.Pow((n * 2) + 1, 2) - 1;
+        float md = total / maxPoints;
+        
+        if (md > k.phearomon)
+        {
+            k.phearomon = md;
+        }
+
+        float density = total / (k.phearomon * maxPoints);
+        density = Mathf.Clamp(density, 0, 1);
+
+        float t = Mathf.Exp(-c * density);
+        return (1 - t) / (1 + t);
     }
 
-    public List<Vector2Int> checkForDeadAnts(Knoten start, int range, bool onCurrentPosition)
+
+    public List<Vector2Int> checkForDeadAnts(Knoten start, int range, bool onCurrentPosition, Ant ant)
     {
         List<Vector2Int> founds = new List<Vector2Int>();
         for (int r = 0; r < maxSeeRange; r++)
@@ -443,8 +496,11 @@ public class Manager : MonoBehaviour
                 {
                     if (!onCurrentPosition && i == 0 && i2 == 0)
                         continue;
+                    
 
                     Vector2Int pos = GetGridPos(start.myX + i, start.myZ + i2);
+                    if (pos.Equals(ant.myLastPile))
+                        continue;
                     Knoten currentKnoten = grid[pos.x, pos.y];
                     if (currentKnoten.deadAnts.Count > 0)
                     {
@@ -453,11 +509,12 @@ public class Manager : MonoBehaviour
                 }
             }
 
-            if (founds.Count >= 0)
+            if (founds.Count > 0)
                 break;
         }
  
-
+        if (founds.Count > 0)
+        founds = founds.OrderBy(x => Vector2.Distance(new Vector2(start.myX, start.myZ), new Vector2(founds[0].x, founds[0].y))).ToList();
         return founds;
     }
     public Vector2Int checkForPheromon(Knoten start, int range)
@@ -475,7 +532,7 @@ public class Manager : MonoBehaviour
                         continue;
                     Vector2Int pos = GetGridPos(start.myX + i, start.myZ + i2);
                     Knoten currentKnoten = grid[pos.x, pos.y];
-                    if (currentKnoten.phearomon > 0f && maxPheromon <= currentKnoten.phearomon)
+                    if (maxPheromon < currentKnoten.phearomon)
                     {
                         found.x = currentKnoten.myX;
                         found.y = currentKnoten.myZ;
@@ -498,12 +555,12 @@ public class Manager : MonoBehaviour
         {
             if (ant.searchForNewDead)
             {
-                var newList = checkForDeadAnts(grid[currentPos.x, currentPos.y], 2, true);
+                var newList = checkForDeadAnts(grid[currentPos.x, currentPos.y], 1, true, ant);
                 if (newList.Contains(ant.myLastPile))
                     newList.Remove(ant.myLastPile);
                 if (newList.Count > 0)
                 {
-                    ant.path = FindPath(currentPos, newList[Random.Range(0, newList.Count)]);
+                    ant.path = FindPath(currentPos, newList[0]);
                     ant.searchForNewDead = false;
                 }
                 
@@ -514,6 +571,7 @@ public class Manager : MonoBehaviour
         }
         else
         {
+
             ant.searchForNewDead = !finised;
             Vector2Int ranpPos = new Vector2Int(Random.Range(0, gridSizeX), Random.Range(0, gridSizeY));
             ant.path = FindPath(currentPos, ranpPos);
@@ -573,7 +631,7 @@ public class Manager : MonoBehaviour
                 }
             }
         }
-        path.RemoveAt(0);
+        
         return path;
     }
 
@@ -646,7 +704,7 @@ public class Manager : MonoBehaviour
 
     void InitTorus()
     {
-        maxSeeRange = Mathf.FloorToInt((float)Mathf.Max(gridSizeX, gridSizeY) * 0.5f);
+        maxSeeRange = Mathf.CeilToInt((float)Mathf.Max(gridSizeX, gridSizeY)) / 2;
         int indexCounter = 0;
         grid = new Knoten[gridSizeX, gridSizeY];
 
@@ -785,11 +843,17 @@ public class Knoten
 
 
     }
+    public float Similarity(Knoten knoten)
+    {
+        return Mathf.Abs(this.phearomon - knoten.phearomon);
+    }
+
 }
 
 [System.Serializable]
 public class Ant
 {
+    public float maxDist;
     public int lifeTimer;
     public int index;
     public bool dead;
@@ -800,6 +864,7 @@ public class Ant
     public Vector2Int myGridPosition, nextGridPosition;
     public List<Vector2Int> path;
     public Vector2Int myLastPile;
+
     public Vector3 myLastPosition;
     public Animator anim;
     public Ant(GameObject p, Vector2Int ip, bool d, int i)
@@ -827,4 +892,6 @@ public class UIElement
     public TMP_Text text;
     public float myValue;
 }
+
+
 
